@@ -1,11 +1,21 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Main where
 
 import Language.Haskell.Exts
 import Control.Monad
 import Data.Tree
+import Data.Foldable
+import Data.Sequence
+import Data.Maybe
+
+import           Hedgehog
+import           Hedgehog.Internal.Property (TestLimit(..))
+import qualified Hedgehog.Gen as Gen
+import qualified Hedgehog.Range as Range
 
 data ReflexAst where
   MonadicT :: ReflexAst -> ReflexAst
@@ -25,7 +35,9 @@ data Operation
   | JoinDynThroughMap -- Dynamic (Map k (Dynamic a)) ->  Dynamic (Map k a)
   | SwitchPromptlyDyn -- Dynamic (Event a)  ->    Event a
   | Coincidence -- Event (Event a)  ->    Event a
-  | SwitchePromptly -- Event a -> Event (Event a)  -> m (Event a)
+  | SwitchPromptly -- Event a -> Event (Event a)  -> m (Event a)
+  | MergeMap -- Map k (Event a) -> Event (Map k a)
+  | ReduceMap -- Map k (Event a) -> Event a (Use mergeList.toList)
 
   -- Monadic operations
   | Dyn -- Dynamic (m a) -> m (Event a)
@@ -34,12 +46,97 @@ data Operation
   | SimpleList -- Dynamic [v] -> (     Dynamic v -> m a ) -> m (Dynamic [a])
   | ListWithKey' -- Map k v -> Event (Map k (Maybe v)) -> (k -> v -> Event v -> m a) -> m (Dynamic (Map k a))
   | PerformEvent -- Event (WidgetHost m  a) -> m (Event a)
+  deriving (Show, Enum,Bounded)
 
-main = undefined
+main =
+  checkParallel $
+  Group
+    "testing"
+    [
+      ("test", testStr "Dynamic t (Dynamic t (Event t Int))" "Event t Int")
+      , ("test2", testStr "Dynamic t (Dynamic t (Event t Int))" "m (Dynamic t Int)")
+      , ("test3", testStr "Dynamic t (Dynamic t (Dynamic t (Event t Int)))" "m (Dynamic t Int)")
+    ]
 
 -- Simplification
 simplify :: ReflexAst -> Tree (Operation, ReflexAst)
 simplify = undefined
+
+testStr :: String -> String -> Property
+testStr str1 str2 = withTests (TestLimit 1000000) . property $ do
+  let
+      -- (Right init) = parseSourceType "m (Dynamic t (m (Event t Int)))"
+      -- (Right res) = parseSourceType "m (Event t Int)"
+      (Right init) = parseSourceType str1
+      (Right res) = parseSourceType str2
+
+  s <- forAll $ Gen.small (ops init)
+  let
+    ret = applyOps init s
+  assert $ ret /= (Just res)
+
+test_prop :: Property
+test_prop = withTests (TestLimit 1000000) . property $ do
+  let
+      -- (Right init) = parseSourceType "m (Dynamic t (m (Event t Int)))"
+      -- (Right res) = parseSourceType "m (Event t Int)"
+      (Right init) = parseSourceType "Dynamic t (Dynamic t (Event t Int))"
+      (Right res) = parseSourceType "Event t Int"
+
+  s <- forAll $ (ops init)
+  let
+    ret = applyOps init s
+  assert $ ret /= (Just res)
+
+opGen :: Monad m => Gen m Operation
+opGen = Gen.enumBounded
+
+shrinkFun :: ReflexAst -> [Operation] -> [[Operation]]
+shrinkFun ast ops =
+  case applyOps ast ops of
+    Nothing -> []
+    Just _ -> map (\o -> (ops ++ [o])) [minBound..maxBound]
+
+ops :: Monad m => ReflexAst -> Gen m ([Operation])
+ops ast =
+  Gen.filter (\ops -> isJust $ applyOps ast ops)
+    (Gen.list (Range.linear 0 5) opGen)
+  -- Gen.shrink (shrinkFun ast) (Gen.list (Range.linear 0 1) (Gen.enum minBound maxBound))
+  -- Gen.shrink (shrinkFun ast) $
+  --   Gen.recursive Gen.choice
+  --     [ops']
+  --     []
+
+ops' :: Monad m => Gen m [Operation]
+ops' = (Gen.list (Range.linear 1 1) (Gen.enum minBound maxBound))
+
+-- Operations
+op1 :: ReflexAst -> Operation -> Maybe ReflexAst
+op1 (DynamicT a) Updated = Just $ EventT a
+op1 (EventT a) HoldDyn = Just $ MonadicT (DynamicT a)
+op1 (DynamicT (DynamicT a)) Join = Just $ DynamicT a
+op1 (MonadicT (MonadicT a)) Join = Just $ MonadicT a
+op1 (DynamicT (MapT v (DynamicT a))) JoinDynThroughMap = Just $ DynamicT (MapT v a)
+op1 (DynamicT (EventT a)) SwitchPromptlyDyn = Just $ EventT a
+op1 (EventT (EventT a)) SwitchPromptly = Just $ EventT a
+op1 (DynamicT (MonadicT a)) Dyn = Just $ MonadicT (EventT a)
+op1 (EventT (MonadicT a)) WidgetHold = Just $ MonadicT (DynamicT a)
+op1 (DynamicT (MapT k a)) ListWithKey = Just $ MonadicT (DynamicT (MapT k a))
+op1 (MapT k (EventT a)) MergeMap = Just $ EventT (MapT k a)
+op1 (MapT k (EventT a)) ReduceMap = Just $ EventT a
+op1 _ _ = Nothing
+
+op2 :: ReflexAst -> Operation -> Operation -> Maybe ReflexAst
+op2 (MonadicT a) FMap op = MonadicT <$> (op1 a op)
+op2 (DynamicT a) FMap op = DynamicT <$> (op1 a op)
+op2 (EventT a) FMap op =   EventT <$> (op1 a op)
+op2 _ _ _ = Nothing
+
+
+applyOps :: ReflexAst -> [Operation] -> Maybe ReflexAst
+applyOps ast (FMap:op:ops) = join $ applyOps <$> (op2 ast FMap op) <*> pure ops
+applyOps ast ops = foldM op1 ast ops
+
 
 -- Parsing
 parseSourceType :: String -> Either String ReflexAst
@@ -85,3 +182,11 @@ instance Show ReflexAst where
   show (EventT ast) = "Event t (" ++ show ast ++ ")"
   show (MapT k ast) = "Map (" ++ prettyPrint k ++ ") (" ++ show ast ++ ")"
   show (TypeVar v) = prettyPrint v
+
+instance Eq ReflexAst where
+  (MonadicT ast1) == (MonadicT ast2) = ast1 == ast2
+  (DynamicT ast1) == (DynamicT ast2) = ast1 == ast2
+  (EventT ast1) == (EventT ast2) = ast1 == ast2
+  (MapT t1 ast1) == (MapT t2 ast2) = (prettyPrint t1 == prettyPrint t2) && ast1 == ast2
+  (TypeVar t1) == (TypeVar t2) = (prettyPrint t1 == prettyPrint t2)
+  (==) _ _ = False
