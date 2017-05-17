@@ -29,7 +29,9 @@ parseSourceType s =
 
 doParseType :: (Show l) => Type l -> Either String ReflexAst
 doParseType (TyApp _ t1 t2) = makeAst t1 t2
+doParseType (TyParen _ t) = doParseType t
 -- doParseType (TyCon _ n) =
+doParseType v@SomeType = Right (TypeVar v)
 doParseType v@(TyVar _ n) = Right (TypeVar v)
 
 doParseType _ = Left "Error parsing type"
@@ -37,8 +39,17 @@ doParseType _ = Left "Error parsing type"
 -- applyReflexAst :: ReflexAst -> ReflexAst -> ReflexAst
 -- applyReflexAst (DynamicT )
 
+pattern SomeType <-
+  (TyCon _ (UnQual _ (Ident _ _)))
 pattern Dynamic <-
   (TyApp _ (TyCon _ (UnQual _ (Ident _ "Dynamic"))) (TyVar _ (Ident _ t)))
+pattern Event <-
+  (TyApp _ (TyCon _ (UnQual _ (Ident _ "Event"))) (TyVar _ (Ident _ t)))
+pattern Map v <-
+  (TyApp _ (TyCon _ (UnQual _ (Ident _ "Map"))) v)
 
 makeAst :: (Show l) => Type l -> Type l -> Either String ReflexAst
 makeAst Dynamic t2 = DynamicT <$> doParseType t2
+makeAst Event t2 = EventT <$> doParseType t2
+makeAst (Map v) t2 = MapT v <$> doParseType t2
+makeAst _ _ = Left "makeAst not yet implemented"
