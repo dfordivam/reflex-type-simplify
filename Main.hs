@@ -105,10 +105,10 @@ opsManualRecurse ast = do
        let os' = os ++ [o]
        case (applyOps ast os') of
          Nothing ->
-           Gen.frequency [(1, l (initSafe os)), (9, l os)]
+           Gen.frequency [(1, l (initSafe os)), (20, l os)]
            -- Gen.recursive Gen.choice [] [l [], l (initSafe os)]
          Just _ ->
-           Gen.frequency [(1, return os'), (4, l os')]
+           Gen.frequency [(1, return os'), (20, l os')]
            -- Gen.recursive Gen.choice [return os'] [l os']
   l []
 
