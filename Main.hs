@@ -5,6 +5,7 @@ module Main where
 
 import Language.Haskell.Exts
 import Control.Monad
+import Data.Tree
 
 data ReflexAst where
   MonadicT :: ReflexAst -> ReflexAst
@@ -13,8 +14,34 @@ data ReflexAst where
   MapT :: Show l => (Type l) -> ReflexAst -> ReflexAst
   TypeVar :: Show l => (Type l) -> ReflexAst
 
+data Operation
+  -- Pure Operations
+  = FMap -- Dynamic a -> Dynamic b
+  | Updated -- Dynamic a -> Event a
+  | TagPromptlyDyn -- Dynamic a -> Event b -> Event a
+  | HoldDyn -- a -> Event a -> m (Dynamic a)
+  | FoldDyn -- (a -> b -> b ) -> b -> Event a -> m (Dynamic b)
+  | Join -- Dynamic (Dynamic a) ->  Dynamic a
+  | JoinDynThroughMap -- Dynamic (Map k (Dynamic a)) ->  Dynamic (Map k a)
+  | SwitchPromptlyDyn -- Dynamic (Event a)  ->    Event a
+  | Coincidence -- Event (Event a)  ->    Event a
+  | SwitchePromptly -- Event a -> Event (Event a)  -> m (Event a)
+
+  -- Monadic operations
+  | Dyn -- Dynamic (m a) -> m (Event a)
+  | WidgetHold -- m a ->   Event (m a) -> m (Dynamic a)
+  | ListWithKey -- Dynamic (Map k v) -> (k -> Dynamic v -> m a ) -> m (Dynamic (Map k a))
+  | SimpleList -- Dynamic [v] -> (     Dynamic v -> m a ) -> m (Dynamic [a])
+  | ListWithKey' -- Map k v -> Event (Map k (Maybe v)) -> (k -> v -> Event v -> m a) -> m (Dynamic (Map k a))
+  | PerformEvent -- Event (WidgetHost m  a) -> m (Event a)
+
 main = undefined
 
+-- Simplification
+simplify :: ReflexAst -> Tree (Operation, ReflexAst)
+simplify = undefined
+
+-- Parsing
 parseSourceType :: String -> Either String ReflexAst
 parseSourceType s =
   case parseType s of
