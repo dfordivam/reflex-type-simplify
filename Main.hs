@@ -52,10 +52,21 @@ main =
   checkParallel $
   Group
     "testing"
-    [
-      ("test", testStr "Dynamic t (Dynamic t (Event t Int))" "Event t Int")
-      , ("test2", testStr "Dynamic t (Dynamic t (Event t Int))" "m (Dynamic t Int)")
-      , ("test3", testStr "Dynamic t (Dynamic t (Dynamic t (Event t Int)))" "m (Dynamic t Int)")
+    [ ("test", testStr "Dynamic t (Dynamic t (Event t Int))" "Event t Int")
+    , ( "test2"
+      , testStr "Dynamic t (Dynamic t (Event t Int))" "m (Dynamic t Int)")
+    , ( "test3"
+      , testStr
+          "Dynamic t (Dynamic t (Dynamic t (Event t Int)))"
+          "m (Dynamic t Int)")
+    , ( "test4"
+      , testStr
+          "Dynamic t (Map k (m (Event t Int)))"
+          "m (Event k Int)")
+    , ( "test5"
+      , testStr
+          "Event t (Dynamic t (Map k (m (Event t Int))))"
+          "m (Dynamic t Int)")
     ]
 
 -- Simplification
@@ -76,37 +87,13 @@ testStr str1 str2 = withTests (TestLimit 1000000) . property $ do
     ret = applyOps init s
   assert $ ret /= (Just res)
 
-test_prop :: Property
-test_prop = withTests (TestLimit 1000000) . property $ do
-  let
-      -- (Right init) = parseSourceType "m (Dynamic t (m (Event t Int)))"
-      -- (Right res) = parseSourceType "m (Event t Int)"
-      (Right init) = parseSourceType "Dynamic t (Dynamic t (Event t Int))"
-      (Right res) = parseSourceType "Event t Int"
-
-  s <- forAll $ (ops init)
-  let
-    ret = applyOps init s
-  assert $ ret /= (Just res)
-
 opGen :: Monad m => Gen m Operation
 opGen = Gen.enumBounded
-
-shrinkFun :: ReflexAst -> [Operation] -> [[Operation]]
-shrinkFun ast ops =
-  case applyOps ast ops of
-    Nothing -> []
-    Just _ -> map (\o -> (ops ++ [o])) [minBound..maxBound]
 
 ops :: Monad m => ReflexAst -> Gen m ([Operation])
 ops ast =
   Gen.filter (\ops -> isJust $ applyOps ast ops)
     (Gen.list (Range.linear 0 5) opGen)
-  -- Gen.shrink (shrinkFun ast) (Gen.list (Range.linear 0 1) (Gen.enum minBound maxBound))
-  -- Gen.shrink (shrinkFun ast) $
-  --   Gen.recursive Gen.choice
-  --     [ops']
-  --     []
 
 opsManualRecurse :: Monad m => ReflexAst -> Gen m [Operation]
 opsManualRecurse ast = do
@@ -117,13 +104,14 @@ opsManualRecurse ast = do
        o <- opGen
        let os' = os ++ [o]
        case (applyOps ast os') of
-         Nothing -> Gen.recursive Gen.choice [l (initSafe os)] [l os]
-         Just _ -> Gen.recursive Gen.choice [return os'] [l os']
+         Nothing ->
+           Gen.frequency [(1, l (initSafe os)), (9, l os)]
+           -- Gen.recursive Gen.choice [] [l [], l (initSafe os)]
+         Just _ ->
+           Gen.frequency [(1, return os'), (4, l os')]
+           -- Gen.recursive Gen.choice [return os'] [l os']
   l []
 
-
-ops' :: Monad m => Gen m [Operation]
-ops' = (Gen.list (Range.linear 1 1) (Gen.enum minBound maxBound))
 
 -- Operations
 op1 :: ReflexAst -> Operation -> Maybe ReflexAst
