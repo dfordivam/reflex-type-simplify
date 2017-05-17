@@ -70,7 +70,8 @@ testStr str1 str2 = withTests (TestLimit 1000000) . property $ do
       (Right init) = parseSourceType str1
       (Right res) = parseSourceType str2
 
-  s <- forAll $ Gen.small (ops init)
+  --s <- forAll $ Gen.small (ops init)
+  s <- forAll $ (opsManualRecurse init)
   let
     ret = applyOps init s
   assert $ ret /= (Just res)
@@ -106,6 +107,20 @@ ops ast =
   --   Gen.recursive Gen.choice
   --     [ops']
   --     []
+
+opsManualRecurse :: Monad m => ReflexAst -> Gen m [Operation]
+opsManualRecurse ast = do
+  let
+    initSafe [] = []
+    initSafe xs = init xs
+    l os = do
+       o <- opGen
+       let os' = os ++ [o]
+       case (applyOps ast os') of
+         Nothing -> Gen.recursive Gen.choice [l (initSafe os)] [l os]
+         Just _ -> Gen.recursive Gen.choice [return os'] [l os']
+  l []
+
 
 ops' :: Monad m => Gen m [Operation]
 ops' = (Gen.list (Range.linear 1 1) (Gen.enum minBound maxBound))
