@@ -11,7 +11,6 @@ import Language.Haskell.Exts
 import Control.Monad
 import Data.Tree
 import Data.Foldable
-import Data.Sequence
 import Data.Maybe
 
 import           Hedgehog
@@ -59,15 +58,14 @@ data OperationTree
 instance Show OperationTree where
   show (Operations ops) = "(" ++
     (concat $ NE.intersperse " . " $
-     fmap (\(c:cs)  -> toLower c : cs) $ fmap show ops) ++ ")"
+     fmap (\(c:cs)  -> toLower c : cs) $ fmap show $ NE.reverse ops) ++ ")"
   show (FMap t) = "(fmap " ++ show t ++ ")"
 
 instance Show [OperationTree] where
   show ops = "(" ++
-    (concat $ intersperse " . " $ fmap show ops) ++ ")"
+    (concat $ intersperse " . " $ fmap show $ reverse ops) ++ ")"
 
 main = do
-  doExampleTesting
 
   let
     loop = do
@@ -78,6 +76,7 @@ main = do
 
       check (testStr s t)
   forever loop
+  doExampleTesting
 
 doExampleTesting =
   checkParallel $
@@ -89,7 +88,7 @@ doExampleTesting =
     , ( "test3"
       , testStr
           "Dynamic t (Dynamic t (Dynamic t (Event t Int)))"
-          "m (Dynamic t Int)")
+          "m (Event t Int)")
     , ( "test4"
       , testStr
           "Dynamic t (Map k (Event t Int))"
@@ -118,7 +117,18 @@ testStr str1 str2 = withTests (TestLimit 1000000) . property $ do
   assert $ (applyOpTree init s) /= (Just res)
 
 opGen :: Monad m => Gen m Operation
-opGen = Gen.enumBounded
+opGen = Gen.frequency
+  [ (1,  return Updated)
+  , (10, return HoldDyn)
+  , (10, return Join)
+  , (10, return JoinDynThroughMap)
+  , (10, return SwitchPromptlyDyn)
+  , (10, return Dyn)
+  , (10, return WidgetHold)
+  , (10, return ListWithKey)
+  , (10, return MergeMap)
+  , (1, return ReduceMap)
+  ]
 
 opTreeGen :: Monad m => Gen m OperationTree
 opTreeGen = Gen.recursive Gen.choice
@@ -147,7 +157,7 @@ opsManualRecurse ast = do
              --   Gen.recursive Gen.choice [return osFmap] [l osFmap]
            -- Gen.recursive Gen.choice [] [l [], l (initSafe os)]
          Just _ ->
-           Gen.frequency [(1, return os'), (4, l os')]
+           Gen.frequency [(4, return os'), (1, l os')]
            -- Gen.recursive Gen.choice [return os'] [l os']
   l []
 
