@@ -2,6 +2,8 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverlappingInstances #-}
 
 module Main where
 
@@ -18,6 +20,8 @@ import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NE
+import Data.List (intersperse)
+import Data.Char (toLower)
 
 data ReflexAst where
   MonadicT :: ReflexAst -> ReflexAst
@@ -51,7 +55,16 @@ data Operation
 data OperationTree
   = Operations (NonEmpty Operation)
   | FMap OperationTree
-  deriving (Show)
+
+instance Show OperationTree where
+  show (Operations ops) = "(" ++
+    (concat $ NE.intersperse " . " $
+     fmap (\(c:cs)  -> toLower c : cs) $ fmap show ops) ++ ")"
+  show (FMap t) = "(fmap " ++ show t ++ ")"
+
+instance Show [OperationTree] where
+  show ops = "(" ++
+    (concat $ intersperse " . " $ fmap show ops) ++ ")"
 
 main =
   checkParallel $
@@ -68,10 +81,10 @@ main =
       , testStr
           "Dynamic t (Map k (Event t Int))"
           "m (Event t (Map k Int))")
-    , ( "test5"
-      , testStr
-          "Event t (Map k (Event t Int))"
-          "Event t (Map k Int)")
+    -- , ( "test5"
+    --   , testStr
+    --       "m (Dynamic t (Map k Int))"
+    --       "m (Event t Int)")
     , ("test6", testStr "Dynamic t (Dynamic t (Event t Int))"
         "m (Event t (Event t Int))")
     ]
@@ -83,16 +96,13 @@ simplify = undefined
 testStr :: String -> String -> Property
 testStr str1 str2 = withTests (TestLimit 1000000) . property $ do
   let
-      -- (Right init) = parseSourceType "m (Dynamic t (m (Event t Int)))"
-      -- (Right res) = parseSourceType "m (Event t Int)"
       (Right init) = parseSourceType str1
       (Right res) = parseSourceType str2
 
-  --s <- forAll $ Gen.small (ops init)
+
+  -- Result --------------------------
   s <- forAll $ (opsManualRecurse init)
-  let
-    ret = applyOpTree init s
-  assert $ ret /= (Just res)
+  assert $ (applyOpTree init s) /= (Just res)
 
 opGen :: Monad m => Gen m Operation
 opGen = Gen.enumBounded
