@@ -16,6 +16,8 @@ import           Hedgehog
 import           Hedgehog.Internal.Property (TestLimit(..))
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
+import Data.List.NonEmpty (NonEmpty)
+import qualified Data.List.NonEmpty as NE
 
 data ReflexAst where
   MonadicT :: ReflexAst -> ReflexAst
@@ -26,8 +28,7 @@ data ReflexAst where
 
 data Operation
   -- Pure Operations
-  = FMap -- Dynamic a -> Dynamic b
-  | Updated -- Dynamic a -> Event a
+  = Updated -- Dynamic a -> Event a
   | TagPromptlyDyn -- Dynamic a -> Event b -> Event a
   | HoldDyn -- a -> Event a -> m (Dynamic a)
   | FoldDyn -- (a -> b -> b ) -> b -> Event a -> m (Dynamic b)
@@ -38,7 +39,6 @@ data Operation
   | SwitchPromptly -- Event a -> Event (Event a)  -> m (Event a)
   | MergeMap -- Map k (Event a) -> Event (Map k a)
   | ReduceMap -- Map k (Event a) -> Event a (Use mergeList.toList)
-
   -- Monadic operations
   | Dyn -- Dynamic (m a) -> m (Event a)
   | WidgetHold -- m a ->   Event (m a) -> m (Dynamic a)
@@ -46,7 +46,12 @@ data Operation
   | SimpleList -- Dynamic [v] -> (     Dynamic v -> m a ) -> m (Dynamic [a])
   | ListWithKey' -- Map k v -> Event (Map k (Maybe v)) -> (k -> v -> Event v -> m a) -> m (Dynamic (Map k a))
   | PerformEvent -- Event (WidgetHost m  a) -> m (Event a)
-  deriving (Show, Enum,Bounded)
+  deriving (Show, Enum, Bounded)
+
+data OperationTree
+  = Operations (NonEmpty Operation)
+  | FMap OperationTree
+  deriving (Show)
 
 main =
   checkParallel $
@@ -61,12 +66,14 @@ main =
           "m (Dynamic t Int)")
     , ( "test4"
       , testStr
-          "Dynamic t (Map k (m (Event t Int)))"
-          "m (Event k Int)")
+          "Dynamic t (Map k (Event t Int))"
+          "m (Event t (Map k Int))")
     , ( "test5"
       , testStr
-          "Event t (Dynamic t (Map k (m (Event t Int))))"
-          "m (Dynamic t Int)")
+          "Event t (Map k (Event t Int))"
+          "Event t (Map k Int)")
+    , ("test6", testStr "Dynamic t (Dynamic t (Event t Int))"
+        "m (Event t (Event t Int))")
     ]
 
 -- Simplification
@@ -84,31 +91,40 @@ testStr str1 str2 = withTests (TestLimit 1000000) . property $ do
   --s <- forAll $ Gen.small (ops init)
   s <- forAll $ (opsManualRecurse init)
   let
-    ret = applyOps init s
+    ret = applyOpTree init s
   assert $ ret /= (Just res)
 
 opGen :: Monad m => Gen m Operation
 opGen = Gen.enumBounded
 
-ops :: Monad m => ReflexAst -> Gen m ([Operation])
-ops ast =
-  Gen.filter (\ops -> isJust $ applyOps ast ops)
-    (Gen.list (Range.linear 0 5) opGen)
+opTreeGen :: Monad m => Gen m OperationTree
+opTreeGen = Gen.recursive Gen.choice
+  [Operations <$> Gen.nonEmpty (Range.linear 0 5) opGen]
+  [FMap <$> opTreeGen]
 
-opsManualRecurse :: Monad m => ReflexAst -> Gen m [Operation]
+-- ops :: Monad m => ReflexAst -> Gen m ([Operation])
+-- ops ast =
+--   Gen.filter (\ops -> isJust $ applyOps ast ops)
+--     (Gen.list (Range.linear 0 5) opGen)
+
+opsManualRecurse :: Monad m => ReflexAst -> Gen m [OperationTree]
 opsManualRecurse ast = do
   let
     initSafe [] = []
     initSafe xs = init xs
     l os = do
-       o <- opGen
+       o <- opTreeGen
        let os' = os ++ [o]
-       case (applyOps ast os') of
+       case (applyOpTree ast os') of
          Nothing ->
-           Gen.frequency [(1, l (initSafe os)), (20, l os)]
+           -- case (applyOps ast osFmap) of
+           --   Nothing ->
+               Gen.frequency [(1, l (initSafe os)), (20, l os)]
+             -- Just _ ->
+             --   Gen.recursive Gen.choice [return osFmap] [l osFmap]
            -- Gen.recursive Gen.choice [] [l [], l (initSafe os)]
          Just _ ->
-           Gen.frequency [(1, return os'), (20, l os')]
+           Gen.frequency [(1, return os'), (4, l os')]
            -- Gen.recursive Gen.choice [return os'] [l os']
   l []
 
@@ -121,7 +137,7 @@ op1 (DynamicT (DynamicT a)) Join = Just $ DynamicT a
 op1 (MonadicT (MonadicT a)) Join = Just $ MonadicT a
 op1 (DynamicT (MapT v (DynamicT a))) JoinDynThroughMap = Just $ DynamicT (MapT v a)
 op1 (DynamicT (EventT a)) SwitchPromptlyDyn = Just $ EventT a
-op1 (EventT (EventT a)) SwitchPromptly = Just $ EventT a
+op1 (EventT (EventT a)) SwitchPromptly = Just $ MonadicT (EventT a)
 op1 (DynamicT (MonadicT a)) Dyn = Just $ MonadicT (EventT a)
 op1 (EventT (MonadicT a)) WidgetHold = Just $ MonadicT (DynamicT a)
 op1 (DynamicT (MapT k a)) ListWithKey = Just $ MonadicT (DynamicT (MapT k a))
@@ -129,17 +145,19 @@ op1 (MapT k (EventT a)) MergeMap = Just $ EventT (MapT k a)
 op1 (MapT k (EventT a)) ReduceMap = Just $ EventT a
 op1 _ _ = Nothing
 
-op2 :: ReflexAst -> Operation -> Operation -> Maybe ReflexAst
-op2 (MonadicT a) FMap op = MonadicT <$> (op1 a op)
-op2 (DynamicT a) FMap op = DynamicT <$> (op1 a op)
-op2 (EventT a) FMap op =   EventT <$> (op1 a op)
-op2 _ _ _ = Nothing
+opFMap :: ReflexAst -> OperationTree -> Maybe ReflexAst
+opFMap (MonadicT a) ops = MonadicT <$> applyOps a ops
+opFMap (DynamicT a) ops = DynamicT <$> applyOps a ops
+opFMap (EventT a)   ops =   EventT <$> applyOps a ops
+opFMap _ _ = Nothing
 
 
-applyOps :: ReflexAst -> [Operation] -> Maybe ReflexAst
-applyOps ast (FMap:op:ops) = join $ applyOps <$> (op2 ast FMap op) <*> pure ops
-applyOps ast ops = foldM op1 ast ops
+applyOps :: ReflexAst -> OperationTree -> Maybe ReflexAst
+applyOps ast (FMap opTree) = opFMap ast opTree
+applyOps ast (Operations ops) = foldM op1 ast ops
 
+applyOpTree :: ReflexAst -> [OperationTree] -> Maybe ReflexAst
+applyOpTree = foldM applyOps
 
 -- Parsing
 parseSourceType :: String -> Either String ReflexAst
