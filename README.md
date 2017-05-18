@@ -29,3 +29,7 @@ m (Event t Int)
     This failure can be reproduced by running:
     > recheck (Size 16) (Seed 3033341105344009770 5793933252947687363) <property>
 ```
+
+
+This work is inspired by 
+http://clrnd.com.ar/posts/2017-04-21-the-water-jug-problem-in-hedgehog.html
