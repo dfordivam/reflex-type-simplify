@@ -66,7 +66,20 @@ instance Show [OperationTree] where
   show ops = "(" ++
     (concat $ intersperse " . " $ fmap show ops) ++ ")"
 
-main =
+main = do
+  doExampleTesting
+
+  let
+    loop = do
+      putStrLn "Enter the starting type"
+      s <- getLine
+      putStrLn "Enter the target type"
+      t <- getLine
+
+      check (testStr s t)
+  forever loop
+
+doExampleTesting =
   checkParallel $
   Group
     "testing"
