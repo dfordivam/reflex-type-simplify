@@ -3,6 +3,8 @@ Use Hedgehog (like QuickCheck) to simplify types (and life) when using reflex-fr
 
 Work in progess.. This is just a preview...
 
+Also See https://github.com/hedgehogqa/haskell-hedgehog
+
 ```
 Enter the starting type
 Dynamic t (m (Event t Int))
